@@ -1,5 +1,4 @@
-﻿using System;
-using System.Collections.Generic;
+using System;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
@@ -7,6 +6,9 @@ using System.Threading;
 
 class CurrencyExchangeServer
 {
+    static int maxConnections = 5;
+    static int currentConnections = 0;
+
     static readonly Dictionary<string, double> exchangeRates = new()
     {
         {"USD_EURO", 0.92},
@@ -29,7 +31,19 @@ class CurrencyExchangeServer
 
         while (true)
         {
+            
+            if (currentConnections >= maxConnections)
+            {
+                Console.WriteLine("Server is at full capacity. Rejecting new connections.");
+                
+                Thread.Sleep(5000);
+                continue;
+            }
+
+            
             TcpClient client = listener.AcceptTcpClient();
+            Interlocked.Increment(ref currentConnections); 
+
             ThreadPool.QueueUserWorkItem(HandleClient, client);
         }
     }
@@ -42,18 +56,18 @@ class CurrencyExchangeServer
         string clientAddress = endPoint.Address.ToString();
         Console.WriteLine($"Client connected: {clientAddress}:{endPoint.Port}");
 
-        if (clientRequests.ContainsKey(clientAddress) &&
-            clientRequests[clientAddress].requestCount >= maxRequests &&
-            DateTime.Now - clientRequests[clientAddress].lastRequestTime < blockTime)
-        {
-            Console.WriteLine($"Client {clientAddress} exceeded request limit. Blocking for {blockTime.TotalMinutes} minutes.");
-            byte[] blockMessage = Encoding.UTF8.GetBytes("Request limit exceeded. Try again later.");
-            stream.Write(blockMessage, 0, blockMessage.Length);
-            return;
-        }
-
         try
         {
+            if (clientRequests.ContainsKey(clientAddress) &&
+                clientRequests[clientAddress].requestCount >= maxRequests &&
+                DateTime.Now - clientRequests[clientAddress].lastRequestTime < blockTime)
+            {
+                Console.WriteLine($"Client {clientAddress} exceeded request limit. Blocking for {blockTime.TotalMinutes} minutes.");
+                byte[] blockMessage = Encoding.UTF8.GetBytes("Request limit exceeded. Try again later.");
+                stream.Write(blockMessage, 0, blockMessage.Length);
+                return;
+            }
+
             byte[] buffer = new byte[1024];
             int bytesRead;
 
@@ -70,6 +84,7 @@ class CurrencyExchangeServer
                 var clientData = clientRequests[clientAddress];
                 clientRequests[clientAddress] = (clientData.requestCount + 1, DateTime.Now);
 
+                
                 string response = exchangeRates.TryGetValue(request.ToUpper(), out double rate) ? rate.ToString() : "Invalid request";
 
                 byte[] responseData = Encoding.UTF8.GetBytes(response);
@@ -81,6 +96,8 @@ class CurrencyExchangeServer
         {
             Console.WriteLine($"Error: {ex.Message}");
         }
+
         Console.WriteLine($"Client {clientAddress} disconnected");
+        Interlocked.Decrement(ref currentConnections); 
     }
 }
